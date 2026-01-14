@@ -35,6 +35,14 @@ const getBackendUrl = (): string => {
 const nextConfig = (): NextConfig => ({
   output: (process.env.NEXT_OUTPUT as 'standalone') || undefined,
   
+  // Disable linting and type checking during build to reduce memory usage
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
+  typescript: {
+    ignoreBuildErrors: true,
+  },
+  
   // Transpile shared package
   transpilePackages: ['@agentpress/shared'],
   

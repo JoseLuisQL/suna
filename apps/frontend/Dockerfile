@@ -48,6 +48,9 @@ WORKDIR /app/apps/frontend
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NEXT_OUTPUT=standalone
 
+# Increase Node.js memory limit for build on low-memory VPS
+ENV NODE_OPTIONS="--max-old-space-size=4096"
+
 RUN corepack enable pnpm && pnpm run build
 
 
