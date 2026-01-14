@@ -33,7 +33,7 @@ services:
       - SUPABASE_URL=https://zprpzciseqmrfayrzzcf.supabase.co
       - SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpwcnB6Y2lzZXFtcmZheXJ6emNmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg0MDYyNTksImV4cCI6MjA4Mzk4MjI1OX0.FgCFeZkx8GrNTEI4mpEhB_-ELhDS3fNQLHHZ0tLydZ0
       - SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpwcnB6Y2lzZXFtcmZheXJ6emNmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2ODQwNjI1OSwiZXhwIjoyMDgzOTgyMjU5fQ.EdkPegSYo1J-NbS6zfDszgILQcl1Q-GmCw3HWCYV-yA
-      - SUPABASE_JWT_SECRET="1qbU49Ja5sLMhLgw7Pv6pDn91FtTGMi4Hd6pV/RFZhNyYstCAQ/YIhlG1bulQ6iZIPfG2nXaDp46fyEWBFhhDg=="
+      - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}
       - DATABASE_URL=postgresql://postgres.zprpzciseqmrfayrzzcf:luisdkb789JLQL@aws-1-us-east-1.pooler.supabase.com:6543/postgres
       # === DAYTONA ===
       - DAYTONA_API_KEY=${DAYTONA_API_KEY}
