@@ -14,8 +14,14 @@ class FreeTierService:
     def __init__(self):
         self.stripe = stripe
         stripe.api_key = config.STRIPE_SECRET_KEY
-        # Check if Stripe is properly configured (need STRIPE_FREE_TIER_ID to create subscriptions)
-        self.stripe_enabled = bool(config.STRIPE_FREE_TIER_ID)
+        # Check if Stripe is properly configured
+        # Need both STRIPE_SECRET_KEY and a custom STRIPE_FREE_TIER_ID (not the default Kortix ones)
+        default_kortix_prices = [
+            'price_1RILb4G6l1KZGqIrK4QLrx9i',  # Kortix prod
+            'price_1RIGvuG6l1KZGqIrw14abxeL',  # Kortix staging
+        ]
+        has_custom_price = config.STRIPE_FREE_TIER_ID and config.STRIPE_FREE_TIER_ID not in default_kortix_prices
+        self.stripe_enabled = bool(config.STRIPE_SECRET_KEY and has_custom_price)
         
     async def auto_subscribe_to_free_tier(self, account_id: str, email: Optional[str] = None) -> Dict:
         lock_key = f"free_tier_setup:{account_id}"
