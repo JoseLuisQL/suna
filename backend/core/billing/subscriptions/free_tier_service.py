@@ -212,6 +212,22 @@ class FreeTierService:
             
             logger.info(f"[FREE TIER] Successfully created local free tier for {account_id}")
             
+            # Install Suna agent for new users
+            try:
+                from core.utils.suna_default_agent_service import SunaDefaultAgentService
+                from core.services.supabase import DBConnection
+                
+                logger.info(f"[FREE TIER] Installing Suna agent for {account_id}")
+                db = DBConnection()
+                suna_service = SunaDefaultAgentService(db)
+                agent_id = await suna_service.install_suna_agent_for_user(account_id)
+                if agent_id:
+                    logger.info(f"[FREE TIER] Suna agent installed: {agent_id}")
+                else:
+                    logger.warning(f"[FREE TIER] Failed to install Suna agent for {account_id}")
+            except Exception as agent_error:
+                logger.error(f"[FREE TIER] Error installing Suna agent: {agent_error}")
+            
             return {
                 'success': True,
                 'subscription_id': f'local_free_{account_id}',
