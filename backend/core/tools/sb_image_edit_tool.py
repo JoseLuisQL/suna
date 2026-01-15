@@ -22,6 +22,10 @@ from core.billing.credits.media_calculator import select_image_quality, cap_qual
 from core.utils.image_processing import upscale_image_sync, remove_background_sync, UPSCALE_MODEL, REMOVE_BG_MODEL
 from core.utils.file_name_generator import generate_smart_filename
 
+# OpenRouter configuration for Gemini image generation
+OPENROUTER_IMAGE_MODEL = "google/gemini-3-pro-image-preview"
+OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
+
 
 def parse_image_paths(image_path: Optional[str | list[str]]) -> list[str]:
     """
@@ -330,13 +334,12 @@ Generate, edit, upscale, or remove background from images. Video generation supp
                 
                 # BILLING: Deduct credits for successful batch images
                 if account_id and not use_mock and len(image_files) > 0:
-                    await media_billing.deduct_replicate_image(
+                    await media_billing.deduct_openrouter_image(
                         account_id=account_id,
-                        model="openai/gpt-image-1.5",
+                        model=OPENROUTER_IMAGE_MODEL,
                         count=len(image_files),
-                        description=f"Batch image {mode} ({len(image_files)} images, quality={quality_variant})",
+                        description=f"Batch image {mode} ({len(image_files)} images)",
                         thread_id=thread_id,
-                        variant=quality_variant,
                     )
                 
                 # If canvas_path provided, add all successful images to canvas
@@ -465,13 +468,12 @@ Generate, edit, upscale, or remove background from images. Video generation supp
                 
                 # BILLING: Deduct credits for successful image generation
                 if account_id and not use_mock:
-                    await media_billing.deduct_replicate_image(
+                    await media_billing.deduct_openrouter_image(
                         account_id=account_id,
-                        model="openai/gpt-image-1.5",
+                        model=OPENROUTER_IMAGE_MODEL,
                         count=1,
-                        description=f"Image {mode} (quality={quality_variant})",
+                        description=f"Image {mode}",
                         thread_id=thread_id,
-                        variant=quality_variant,
                     )
                 
                 # Success - result is filename (include full path so AI knows exact location)
@@ -501,6 +503,124 @@ Generate, edit, upscale, or remove background from images. Video generation supp
         os.environ["REPLICATE_API_TOKEN"] = token
         return token
 
+    def _get_openrouter_api_key(self) -> str:
+        """Get OpenRouter API key from config"""
+        config = get_config()
+        api_key = config.OPENROUTER_API_KEY
+        if not api_key:
+            raise Exception("OpenRouter API key not configured. Add OPENROUTER_API_KEY to your .env")
+        return api_key
+
+    async def _generate_with_openrouter(
+        self,
+        prompt: str,
+        image_bytes: Optional[bytes] = None,
+        aspect_ratio: str = "1:1"
+    ) -> bytes:
+        """
+        Generate or edit image using Gemini 3 Pro via OpenRouter API.
+        
+        Parameters:
+        - prompt: Text prompt for image generation/editing
+        - image_bytes: Optional input image bytes for editing mode
+        - aspect_ratio: Desired aspect ratio (informational, included in prompt)
+        
+        Returns:
+        - bytes: Generated image data
+        
+        Raises:
+        - Exception: On API errors
+        """
+        api_key = self._get_openrouter_api_key()
+        
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://kortix.ai",
+            "X-Title": "Kortix Image Generation"
+        }
+        
+        # Build message content
+        content = []
+        
+        # Add aspect ratio hint to prompt
+        enhanced_prompt = f"{prompt}\n\nGenerate the image with aspect ratio: {aspect_ratio}"
+        content.append({"type": "text", "text": enhanced_prompt})
+        
+        # Add input image if provided (for edit mode)
+        if image_bytes:
+            image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+            image_data_url = f"data:image/png;base64,{image_b64}"
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": image_data_url}
+            })
+        
+        payload = {
+            "model": OPENROUTER_IMAGE_MODEL,
+            "messages": [{
+                "role": "user",
+                "content": content
+            }],
+            "modalities": ["image", "text"]
+        }
+        
+        logger.info(f"Calling OpenRouter {OPENROUTER_IMAGE_MODEL} for image generation")
+        
+        async with get_http_client() as client:
+            response = await client.post(
+                f"{OPENROUTER_API_BASE}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=120.0
+            )
+            
+            if response.status_code != 200:
+                error_text = response.text
+                logger.error(f"OpenRouter error: {response.status_code} - {error_text[:500]}")
+                raise Exception(f"OpenRouter API error: {error_text[:200]}")
+            
+            result = response.json()
+            
+            # Extract generated image from response
+            if result.get("choices"):
+                message = result["choices"][0].get("message", {})
+                
+                # Check for images array (new format)
+                if message.get("images"):
+                    image_url = message["images"][0]["image_url"]["url"]
+                    return await self._fetch_image_from_url_or_base64(image_url)
+                
+                # Check content for image parts
+                content_result = message.get("content", [])
+                if isinstance(content_result, list):
+                    for part in content_result:
+                        if isinstance(part, dict) and part.get("type") == "image_url":
+                            image_url = part["image_url"]["url"]
+                            return await self._fetch_image_from_url_or_base64(image_url)
+                
+                # Check if content itself is a data URL
+                if isinstance(content_result, str) and content_result.startswith("data:image"):
+                    return await self._fetch_image_from_url_or_base64(content_result)
+            
+            raise Exception("No image in OpenRouter response")
+
+    async def _fetch_image_from_url_or_base64(self, image_data: str) -> bytes:
+        """Fetch image bytes from URL or decode from base64 data URL."""
+        if image_data.startswith("data:image"):
+            # Extract base64 data from data URL
+            # Format: data:image/png;base64,<base64_data>
+            parts = image_data.split(",", 1)
+            if len(parts) == 2:
+                return base64.b64decode(parts[1])
+            raise Exception("Invalid base64 image data URL")
+        else:
+            # Fetch from URL
+            async with get_http_client() as client:
+                response = await client.get(image_data, timeout=60.0)
+                response.raise_for_status()
+                return response.content
+
     async def _execute_single_image_operation(
         self,
         mode: str,
@@ -512,22 +632,22 @@ Generate, edit, upscale, or remove background from images. Video generation supp
     ) -> str | ToolResult:
         """
         Helper function to execute a single image generation or edit operation.
-        Uses Replicate with GPT Image 1.5 for both generation and editing.
+        Uses OpenRouter with Gemini 3 Pro Image Preview for both generation and editing.
         
         Parameters:
         - mode: 'generate' or 'edit'
         - prompt: The text prompt for generation/editing
         - image_path: Path to image (required for edit mode)
         - use_mock: Whether to use mock mode
-        - quality: Quality variant ('low', 'medium', 'high') - affects output quality and cost
+        - quality: Quality variant ('low', 'medium', 'high') - not used by Gemini but kept for API compatibility
         - aspect_ratio: Output aspect ratio ('1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3')
         
         Returns:
         - str: Filename of the generated/edited image on success
         - ToolResult: Error result on failure
         """
-        # Validate aspect_ratio - only 3 ratios supported by the API
-        valid_ratios = ["1:1", "3:2", "2:3"]
+        # Validate aspect_ratio
+        valid_ratios = ["1:1", "3:2", "2:3", "16:9", "9:16", "4:3", "3:4"]
         if aspect_ratio not in valid_ratios:
             aspect_ratio = "1:1"  # Default to square if invalid
         
@@ -540,66 +660,28 @@ Generate, edit, upscale, or remove background from images. Video generation supp
                     return image_filename
                 return image_filename
             
-            # Ensure Replicate token is set
-            self._get_replicate_token()
-
-            if mode == "generate":
-                logger.info(f"Calling Replicate openai/gpt-image-1.5 for generation (quality={quality}, aspect_ratio={aspect_ratio})")
-                # Wrap replicate.run() in thread pool to avoid blocking event loop
-                output = await asyncio.to_thread(
-                    replicate.run,
-                    "openai/gpt-image-1.5",
-                    input={
-                        "prompt": prompt,
-                        "aspect_ratio": aspect_ratio,
-                        "number_of_images": 1,
-                        "quality": quality,
-                    }
-                )
-            elif mode == "edit":
+            # Get input image bytes for edit mode
+            input_image_bytes = None
+            if mode == "edit":
                 if not image_path:
                     return self.fail_response("'image_path' is required for edit mode.")
- 
-                image_bytes = await self._get_image_bytes(image_path)
-                if isinstance(image_bytes, ToolResult):  # Error occurred
-                    return image_bytes
-
-                # Convert image to base64 data URL
-                image_b64 = base64.b64encode(image_bytes).decode('utf-8')
-                image_data_url = f"data:image/png;base64,{image_b64}"
-
-                logger.info(f"Calling Replicate openai/gpt-image-1.5 for editing (quality={quality}, aspect_ratio={aspect_ratio}) with image_path='{image_path}' (image size: {len(image_bytes)} bytes)")
-                # Wrap replicate.run() in thread pool to avoid blocking event loop
-                output = await asyncio.to_thread(
-                    replicate.run,
-                    "openai/gpt-image-1.5",
-                    input={
-                        "prompt": prompt,
-                        "input_images": [image_data_url],  # Note: input_images is an ARRAY
-                        "aspect_ratio": aspect_ratio,
-                        "number_of_images": 1,
-                        "quality": quality,
-                    }
-                )
+                
+                input_image_bytes = await self._get_image_bytes(image_path)
+                if isinstance(input_image_bytes, ToolResult):  # Error occurred
+                    return input_image_bytes
+                
+                logger.info(f"Calling OpenRouter {OPENROUTER_IMAGE_MODEL} for editing with image_path='{image_path}' (image size: {len(input_image_bytes)} bytes)")
+            elif mode == "generate":
+                logger.info(f"Calling OpenRouter {OPENROUTER_IMAGE_MODEL} for generation (aspect_ratio={aspect_ratio})")
             else:
                 return self.fail_response("Invalid mode. Use 'generate' or 'edit'.")
 
-            # Process Replicate output - it returns a list of FileOutput objects
-            output_list = list(output) if hasattr(output, '__iter__') and not hasattr(output, 'read') else [output]
-            if len(output_list) == 0:
-                return self.fail_response("No output from image model")
-            
-            # Get the first result and convert to bytes
-            first_output = output_list[0]
-            if hasattr(first_output, 'read'):
-                result_bytes = first_output.read()
-            else:
-                # Fetch from URL if it's a URL string
-                url = str(first_output.url) if hasattr(first_output, 'url') else str(first_output)
-                async with get_http_client() as client:
-                    response = await client.get(url)
-                    response.raise_for_status()
-                    result_bytes = response.content
+            # Call OpenRouter API with Gemini 3 Pro Image Preview
+            result_bytes = await self._generate_with_openrouter(
+                prompt=prompt,
+                image_bytes=input_image_bytes,
+                aspect_ratio=aspect_ratio
+            )
 
             # Generate smart filename using LLM based on the prompt
             smart_filename = await generate_smart_filename(
