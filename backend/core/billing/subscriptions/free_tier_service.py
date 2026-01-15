@@ -14,6 +14,8 @@ class FreeTierService:
     def __init__(self):
         self.stripe = stripe
         stripe.api_key = config.STRIPE_SECRET_KEY
+        # Check if Stripe is properly configured
+        self.stripe_enabled = bool(config.STRIPE_SECRET_KEY and config.STRIPE_FREE_TIER_ID)
         
     async def auto_subscribe_to_free_tier(self, account_id: str, email: Optional[str] = None) -> Dict:
         lock_key = f"free_tier_setup:{account_id}"
@@ -44,6 +46,11 @@ class FreeTierService:
                         f"provider={provider}), skipping"
                     )
                     return {'success': False, 'message': 'Already subscribed'}
+            
+            # If Stripe is not configured, create free tier without Stripe
+            if not self.stripe_enabled:
+                logger.info(f"[FREE TIER] Stripe not configured, creating local free tier for {account_id}")
+                return await self._create_local_free_tier(account_id)
             
             stripe_customer_id = billing_customer.get('id') if billing_customer else None
             
@@ -159,6 +166,55 @@ class FreeTierService:
         finally:
             await lock.release()
             logger.info(f"[FREE TIER] Released lock for {account_id}")
+
+    async def _create_local_free_tier(self, account_id: str) -> Dict:
+        """Create a free tier subscription without Stripe integration."""
+        try:
+            # Create credit account with free tier
+            await billing_repo.upsert_credit_account(account_id, {
+                'tier': 'free',
+                'stripe_subscription_id': f'local_free_{account_id}',
+                'last_grant_date': datetime.now().isoformat(),
+                'balance': 0,
+                'expiring_credits': 0,
+                'non_expiring_credits': 0
+            })
+            
+            # Grant initial credits
+            from core.services.credits import credit_service
+            refreshed, amount = await credit_service.check_and_refresh_daily_credits(account_id)
+            if refreshed:
+                logger.info(f"[FREE TIER] Triggered initial daily refresh: ${amount} credits granted to {account_id}")
+            
+            # Check and grant initial credits if needed
+            current_balance_result = await billing_repo.get_credit_account_balance(account_id)
+            current_balance = float(current_balance_result.get('balance', 0)) if current_balance_result else 0
+            
+            if current_balance < FREE_TIER_INITIAL_CREDITS:
+                from ..credits.manager import credit_manager
+                from decimal import Decimal
+                
+                logger.info(f"[FREE TIER] Granting {FREE_TIER_INITIAL_CREDITS} initial credits to {account_id}")
+                await credit_manager.add_credits(
+                    account_id=account_id,
+                    amount=Decimal(str(FREE_TIER_INITIAL_CREDITS)),
+                    is_expiring=True,
+                    description="Free tier initial credits",
+                    expires_at=datetime.now() + relativedelta(months=1)
+                )
+                logger.info(f"[FREE TIER] Granted {FREE_TIER_INITIAL_CREDITS} credits to new free tier user {account_id}")
+            
+            logger.info(f"[FREE TIER] Successfully created local free tier for {account_id}")
+            
+            return {
+                'success': True,
+                'subscription_id': f'local_free_{account_id}',
+                'customer_id': None
+            }
+            
+        except Exception as e:
+            logger.error(f"[FREE TIER] Error creating local free tier for {account_id}: {e}")
+            return {'success': False, 'error': str(e)}
 
 
 free_tier_service = FreeTierService()
