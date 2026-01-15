@@ -14,8 +14,8 @@ class FreeTierService:
     def __init__(self):
         self.stripe = stripe
         stripe.api_key = config.STRIPE_SECRET_KEY
-        # Check if Stripe is properly configured
-        self.stripe_enabled = bool(config.STRIPE_SECRET_KEY and config.STRIPE_FREE_TIER_ID)
+        # Check if Stripe is properly configured (need STRIPE_FREE_TIER_ID to create subscriptions)
+        self.stripe_enabled = bool(config.STRIPE_FREE_TIER_ID)
         
     async def auto_subscribe_to_free_tier(self, account_id: str, email: Optional[str] = None) -> Dict:
         lock_key = f"free_tier_setup:{account_id}"
