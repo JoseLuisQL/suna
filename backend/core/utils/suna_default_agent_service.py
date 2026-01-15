@@ -75,12 +75,13 @@ class SunaDefaultAgentService:
     
     async def install_suna_agent_for_user(self, account_id: str, replace_existing: bool = False) -> Optional[str]:
         """Install Suna agent for a specific user."""
-        logger.debug(f"🔄 Installing Suna agent for user: {account_id}")
+        logger.info(f"[SUNA] Starting agent installation for user: {account_id}")
         
         try:
             client = await self._db.client
             
             # Check for existing Suna agent
+            logger.info(f"[SUNA] Checking for existing agent for user: {account_id}")
             existing_result = await client.table('agents').select('agent_id').eq('account_id', account_id).eq('metadata->>is_suna_default', 'true').execute()
             
             if existing_result.data:
@@ -89,18 +90,19 @@ class SunaDefaultAgentService:
                 if replace_existing:
                     # Delete existing agent
                     await self._delete_agent(existing_agent_id)
-                    logger.debug(f"Deleted existing Suna agent for replacement")
+                    logger.info(f"[SUNA] Deleted existing Suna agent for replacement")
                 else:
-                    logger.debug(f"User {account_id} already has Suna agent: {existing_agent_id}")
+                    logger.info(f"[SUNA] User {account_id} already has Suna agent: {existing_agent_id}")
                     return existing_agent_id
 
             # Create new agent
+            logger.info(f"[SUNA] Creating new Suna agent for user: {account_id}")
             agent_id = await self._create_suna_agent_for_user(account_id)
-            logger.debug(f"Successfully installed Suna agent {agent_id} for user {account_id}")
+            logger.info(f"[SUNA] Successfully installed Suna agent {agent_id} for user {account_id}")
             return agent_id
                 
         except Exception as e:
-            logger.error(f"Error in install_suna_agent_for_user: {e}")
+            logger.error(f"[SUNA] Error in install_suna_agent_for_user for {account_id}: {e}", exc_info=True)
             return None
     
     async def get_suna_agent_stats(self) -> Dict[str, Any]:
@@ -132,6 +134,8 @@ class SunaDefaultAgentService:
         """Create a Suna agent for a user."""
         from core.config.suna_config import SUNA_CONFIG
         
+        logger.info(f"[SUNA] _create_suna_agent_for_user called for {account_id}")
+        
         client = await self._db.client
         
         # Create agent record
@@ -151,16 +155,21 @@ class SunaDefaultAgentService:
             "version_count": 1
         }
         
+        logger.info(f"[SUNA] Inserting agent record for {account_id}")
         result = await client.table('agents').insert(agent_data).execute()
         
         if not result.data:
+            logger.error(f"[SUNA] Failed to create agent record - no data returned")
             raise Exception("Failed to create agent record")
         
         agent_id = result.data[0]['agent_id']
+        logger.info(f"[SUNA] Agent record created with ID: {agent_id}")
         
         # Create initial version
+        logger.info(f"[SUNA] Creating initial version for agent {agent_id}")
         await self._create_initial_version(agent_id, account_id)
         
+        logger.info(f"[SUNA] Agent creation complete: {agent_id}")
         return agent_id
     
     async def _create_initial_version(self, agent_id: str, account_id: str) -> None:
