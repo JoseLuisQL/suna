@@ -84,6 +84,7 @@ def _create_cliproxyai_basic_config() -> ModelConfig:
     """CliProxyAI basic config - reasoning OFF"""
     return ModelConfig(
         base_url=config.CLIPROXYAI_API_BASE,
+        api_key=config.CLIPROXYAI_API_KEY,
     )
 
 
@@ -91,6 +92,7 @@ def _create_cliproxyai_power_config() -> ModelConfig:
     """CliProxyAI power config - reasoning extra_high"""
     return ModelConfig(
         base_url=config.CLIPROXYAI_API_BASE,
+        api_key=config.CLIPROXYAI_API_KEY,
         reasoning=ReasoningSettings(enabled=True, split_output=True),
         extra_body={"reasoning_effort": "high"},
     )

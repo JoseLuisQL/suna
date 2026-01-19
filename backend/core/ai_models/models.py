@@ -66,6 +66,7 @@ class ReasoningSettings:
 class ModelConfig:
     api_base: Optional[str] = None
     api_version: Optional[str] = None
+    api_key: Optional[str] = None
     base_url: Optional[str] = None
     deployment_id: Optional[str] = None
     timeout: Optional[Union[float, int]] = None
@@ -143,7 +144,7 @@ class Model:
         return params
     
     def _apply_model_config(self, params: Dict[str, Any]):
-        api_params = ['api_base', 'api_version', 'base_url', 'deployment_id', 'timeout', 'num_retries']
+        api_params = ['api_base', 'api_version', 'api_key', 'base_url', 'deployment_id', 'timeout', 'num_retries']
         
         for param_name in api_params:
             param_value = getattr(self.config, param_name, None)
