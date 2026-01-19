@@ -42,6 +42,7 @@ services:
       # === COMPOSIO ===
       - COMPOSIO_API_KEY=${COMPOSIO_API_KEY}
       # === LLM PROVIDERS ===
+      - MAIN_LLM=openrouter
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
