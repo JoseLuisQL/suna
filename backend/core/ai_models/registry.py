@@ -57,6 +57,11 @@ class PricingPresets:
         output_cost_per_million_tokens=0.60,
         cached_read_cost_per_million_tokens=0.075,
     )
+    
+    CLIPROXYAI = ModelPricing(
+        input_cost_per_million_tokens=0.50,
+        output_cost_per_million_tokens=1.50,
+    )
 
 
 FREE_MODEL_ID = "kortix/basic"
@@ -72,6 +77,22 @@ def _create_minimax_model_config() -> ModelConfig:
     return ModelConfig(
         reasoning=ReasoningSettings(enabled=True, split_output=True),
         extra_body={"app": "Kortix.com"},
+    )
+
+
+def _create_cliproxyai_basic_config() -> ModelConfig:
+    """CliProxyAI basic config - reasoning OFF"""
+    return ModelConfig(
+        base_url=config.CLIPROXYAI_API_BASE,
+    )
+
+
+def _create_cliproxyai_power_config() -> ModelConfig:
+    """CliProxyAI power config - reasoning extra_high"""
+    return ModelConfig(
+        base_url=config.CLIPROXYAI_API_BASE,
+        reasoning=ReasoningSettings(enabled=True, split_output=True),
+        extra_body={"reasoning_effort": "high"},
     )
 
 
@@ -227,6 +248,26 @@ class ModelFactory:
                 recommended=True,
                 enabled=True,
             )
+        elif main_llm == "cliproxyai":
+            return Model(
+                id="kortix/basic",
+                name="Kortix Basic",
+                litellm_model_id="openai/gpt-5.1",
+                provider=ModelProvider.CLIPROXYAI,
+                aliases=["kortix-basic", "Kortix Basic"],
+                context_window=128_000,
+                capabilities=[
+                    ModelCapability.CHAT,
+                    ModelCapability.FUNCTION_CALLING,
+                    ModelCapability.VISION,
+                ],
+                pricing=PricingPresets.CLIPROXYAI,
+                tier_availability=["free", "paid"],
+                priority=102,
+                recommended=True,
+                enabled=True,
+                config=_create_cliproxyai_basic_config(),
+            )
         else:  # minimax
             return Model(
                 id="kortix/basic",
@@ -334,6 +375,27 @@ class ModelFactory:
                 priority=101,
                 recommended=True,
                 enabled=True,
+            )
+        elif main_llm == "cliproxyai":
+            return Model(
+                id="kortix/power",
+                name="Kortix Advanced Mode",
+                litellm_model_id="openai/gpt-5.2",
+                provider=ModelProvider.CLIPROXYAI,
+                aliases=["kortix-power", "Kortix POWER Mode", "Kortix Power", "Kortix Advanced Mode"],
+                context_window=128_000,
+                capabilities=[
+                    ModelCapability.CHAT,
+                    ModelCapability.FUNCTION_CALLING,
+                    ModelCapability.VISION,
+                    ModelCapability.THINKING,
+                ],
+                pricing=PricingPresets.CLIPROXYAI,
+                tier_availability=["paid"],
+                priority=101,
+                recommended=True,
+                enabled=True,
+                config=_create_cliproxyai_power_config(),
             )
         else:  # minimax
             return Model(

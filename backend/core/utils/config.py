@@ -51,7 +51,7 @@ class Configuration:
     AGENT_TOOL_EXECUTION_STRATEGY: str = "parallel"  # "parallel" or "sequential"
     
     # Model selection
-    # Options: "bedrock", "anthropic", "minimax", "grok", "openai"
+    # Options: "bedrock", "anthropic", "minimax", "grok", "openai", "cliproxyai"
     MAIN_LLM: str = "bedrock"
     # ============================================
     
@@ -299,6 +299,8 @@ class Configuration:
     OPENROUTER_API_BASE: Optional[str] = "https://openrouter.ai/api/v1"
     OPENAI_COMPATIBLE_API_KEY: Optional[str] = None
     OPENAI_COMPATIBLE_API_BASE: Optional[str] = None
+    CLIPROXYAI_API_KEY: Optional[str] = None
+    CLIPROXYAI_API_BASE: Optional[str] = "https://api.qware.me/v1"
     OR_SITE_URL: Optional[str] = "https://www.kortix.com"
     OR_APP_NAME: Optional[str] = "Kortix.com"
     
