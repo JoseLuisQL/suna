@@ -59,6 +59,10 @@ services:
       - EXA_API_KEY=${EXA_API_KEY}
       - SERPER_API_KEY=${SERPER_API_KEY}
       - RAPID_API_KEY=${RAPID_API_KEY}
+      # === SANDBOX POOL ===
+      - SANDBOX_POOL_MIN_SIZE=2
+      - SANDBOX_POOL_MAX_SIZE=2
+      - SANDBOX_POOL_PARALLEL_CREATE=1
       # === WEBHOOKS & SECURITY ===
       - WEBHOOK_BASE_URL=https://api.kortix.qware.me
       - NEXT_PUBLIC_URL=https://kortix.qware.me
