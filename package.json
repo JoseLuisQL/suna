@@ -1,7 +1,7 @@
 {
   "name": "agentpress",
   "private": true,
-  "packageManager": "pnpm@8.15.9",
+  "packageManager": "pnpm@9.15.4",
   "scripts": {
     "dev:frontend": "pnpm --filter Kortix dev",
     "dev:mobile": "pnpm --filter kortix dev",
