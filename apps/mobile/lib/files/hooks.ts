@@ -8,6 +8,7 @@ import { useMutation, useQuery, useQueryClient, type UseMutationOptions, type Us
 import { API_URL, getAuthToken } from '@/api/config';
 import type { SandboxFile, FileUploadResponse } from '@/api/types';
 import type { SandboxState, SandboxStatus } from '@agentpress/shared/types/sandbox';
+import { normalizeFilenameToNFC } from './utils';
 
 // Re-export sandbox types for convenience
 export type { SandboxState, SandboxStatus } from '@agentpress/shared/types/sandbox';
@@ -368,7 +369,8 @@ export function useUploadFileToSandbox(
       const token = await getAuthToken();
       if (!token) throw new Error('Authentication required');
 
-      const normalizedName = file.name.normalize('NFC');
+      // Normalize filename for Unix compatibility (removes colons, special chars, etc.)
+      const normalizedName = normalizeFilenameToNFC(file.name);
       const uploadPath = destinationPath || `/workspace/uploads/${normalizedName}`;
 
       const formData = new FormData();
@@ -399,6 +401,54 @@ export function useUploadFileToSandbox(
   });
 }
 
+
+export function useStageFiles(
+  options?: UseMutationOptions<
+    Array<{ file_id: string; filename: string; storage_path: string; mime_type: string; file_size: number; status: string }>,
+    Error,
+    {
+      files: Array<{ uri: string; name: string; type: string; fileId: string }>;
+      onProgress?: (fileId: string, progress: number) => void;
+    }
+  >
+) {
+  return useMutation({
+    mutationFn: async ({ files, onProgress }) => {
+      const token = await getAuthToken();
+      if (!token) throw new Error('Authentication required');
+
+      const results: Array<{ file_id: string; filename: string; storage_path: string; mime_type: string; file_size: number; status: string }> = [];
+
+      for (const file of files) {
+        // Normalize filename for Unix compatibility (removes colons, special chars, etc.)
+        const normalizedName = normalizeFilenameToNFC(file.name);
+        const formData = new FormData();
+        formData.append('file', {
+          uri: file.uri,
+          name: normalizedName,
+          type: file.type || 'application/octet-stream',
+        } as any);
+        formData.append('file_id', file.fileId);
+
+        const res = await fetch(`${API_URL}/files/stage`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: formData,
+        });
+
+        if (!res.ok) throw new Error(`Staging failed for ${file.name}: ${res.status}`);
+        
+        const result = await res.json();
+        results.push(result);
+        onProgress?.(file.fileId, 100);
+      }
+
+      return results;
+    },
+    ...options,
+  });
+}
+
 export function useUploadMultipleFiles(
   options?: UseMutationOptions<
     FileUploadResponse[],
@@ -420,7 +470,8 @@ export function useUploadMultipleFiles(
       const results: FileUploadResponse[] = [];
 
       for (const file of files) {
-        const normalizedName = file.name.normalize('NFC');
+        // Normalize filename for Unix compatibility (removes colons, special chars, etc.)
+        const normalizedName = normalizeFilenameToNFC(file.name);
         const formData = new FormData();
         formData.append('file', {
           uri: file.uri,
@@ -449,6 +500,99 @@ export function useUploadMultipleFiles(
         queryKey: ['files', 'sandbox', variables.sandboxId],
         exact: false,
         refetchType: 'all',
+      });
+    },
+    ...options,
+  });
+}
+
+/**
+ * Hook to upload files to a project (creates sandbox on-demand if needed)
+ * This is the preferred method for file uploads as it doesn't require sandbox_id upfront
+ */
+export function useUploadFilesToProject(
+  options?: UseMutationOptions<
+    FileUploadResponse[],
+    Error,
+    {
+      projectId: string;
+      files: Array<{ uri: string; name: string; type: string }>;
+      onProgress?: (file: string, progress: number) => void;
+    }
+  >
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ projectId, files, onProgress }) => {
+      const token = await getAuthToken();
+      if (!token) throw new Error('Authentication required');
+
+      // Signal upload start
+      try {
+        await fetch(`${API_URL}/project/${projectId}/files/upload-started`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ file_count: files.length }),
+        });
+      } catch (e) {
+        console.warn('Failed to signal upload start:', e);
+      }
+
+      const results: FileUploadResponse[] = [];
+
+      try {
+        for (const file of files) {
+          // Normalize filename for Unix compatibility
+          const normalizedName = normalizeFilenameToNFC(file.name);
+          const uploadPath = `/workspace/uploads/${normalizedName}`;
+
+          const formData = new FormData();
+          formData.append('file', {
+            uri: file.uri,
+            name: normalizedName,
+            type: file.type || 'application/octet-stream',
+          } as any);
+          formData.append('path', uploadPath);
+
+          const res = await fetch(`${API_URL}/project/${projectId}/files`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+            body: formData,
+          });
+
+          if (!res.ok) {
+            if (res.status === 431) {
+              throw new Error('Request is too large');
+            }
+            throw new Error(`Upload failed: ${res.statusText}`);
+          }
+
+          const result = await res.json();
+          results.push(result);
+          onProgress?.(file.name, 100);
+        }
+      } finally {
+        // Signal upload complete
+        try {
+          await fetch(`${API_URL}/project/${projectId}/files/upload-completed`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+          });
+        } catch (e) {
+          console.warn('Failed to signal upload complete:', e);
+        }
+      }
+
+      return results;
+    },
+    onSuccess: (_, variables) => {
+      // Invalidate sandbox status to reflect new files
+      queryClient.invalidateQueries({ 
+        queryKey: sandboxKeys.status(variables.projectId),
       });
     },
     ...options,
