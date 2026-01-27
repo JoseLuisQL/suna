@@ -307,24 +307,6 @@ class ModelFactory:
                 enabled=True,
                 config=_create_cliproxyai_basic_config(),
             )
-        else:  # minimax
-            return Model(
-                id="kortix/basic",
-                name="Kortix Basic",
-                litellm_model_id=custom_model or default_models["minimax"],
-                provider=ModelProvider.OPENROUTER,
-                aliases=["kortix-basic", "Kortix Basic"],
-                context_window=200_000,
-                capabilities=[
-                    ModelCapability.CHAT,
-                    ModelCapability.FUNCTION_CALLING,
-                    ModelCapability.VISION,
-                ],
-                tier_availability=["free", "paid"],
-                priority=102,
-                recommended=True,
-                enabled=True,
-            )
         else:  # minimax or unknown
             return Model(
                 id="kortix/basic",
@@ -346,6 +328,7 @@ class ModelFactory:
                 enabled=True,
                 config=_create_minimax_model_config(),
             )
+
     
     @staticmethod
     def create_power_model(main_llm: str, custom_model: Optional[str] = None) -> Model:
