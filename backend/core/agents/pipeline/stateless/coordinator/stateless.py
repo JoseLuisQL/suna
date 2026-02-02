@@ -37,6 +37,7 @@ class StatelessCoordinator(BaseCoordinator):
             await stream_prep_stage(ctx.stream_key, "initializing", "Setting up", 10)
 
             if not await ownership.claim(ctx.agent_run_id):
+                logger.error(f"[CLAIM_FAILED] Run {ctx.agent_run_id} already claimed by another worker! Worker ID: {ownership.worker_id}")
                 yield {"type": "error", "error": "Run already claimed", "error_code": "ALREADY_CLAIMED"}
                 return
 
@@ -208,6 +209,17 @@ class StatelessCoordinator(BaseCoordinator):
             logger.warning(f"[Coordinator] Pre-status flush error: {e}")
 
         await asyncio.sleep(0.2)
+
+        # Queue for conversation analytics (non-blocking)
+        try:
+            from core.analytics.conversation_analyzer import queue_for_analysis
+            await queue_for_analysis(
+                thread_id=self._state.thread_id,
+                agent_run_id=self._state.run_id,
+                account_id=self._state.account_id
+            )
+        except Exception as e:
+            logger.warning(f"[Coordinator] Failed to queue analytics: {e}")
 
     async def _cleanup(self, ctx: PipelineContext) -> None:
         cleanup_errors = []

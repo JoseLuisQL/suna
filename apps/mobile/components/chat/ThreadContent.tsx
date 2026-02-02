@@ -1,4 +1,4 @@
-import React, { useMemo, useCallback } from 'react';
+  import React, { useMemo, useCallback } from 'react';
 import { View, Pressable, Linking, Text as RNText, TextInput, Platform, ScrollView, Image } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 // NOTE: useSmoothText removed - following frontend pattern of displaying content immediately
@@ -55,6 +55,7 @@ import { TaskCompletedFeedback } from './tool-views/complete-tool/TaskCompletedF
 import { renderAssistantMessage } from './assistant-message-renderer';
 import { PromptExamples } from '@/components/shared';
 import { ReasoningSection } from './ReasoningSection';
+import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { useKortixComputerStore } from '@/stores/kortix-computer-store';
 import { isKortixDefaultAgentId } from '@/lib/agents';
 import { log } from '@/lib/logger';
@@ -127,6 +128,49 @@ function extractSlideInfo(toolResult: { output?: any; success?: boolean } | unde
     }
   } catch (e) {
     log.error('[extractSlideInfo] Error:', e);
+  }
+  return undefined;
+}
+
+/**
+ * Extract slide info from tool call arguments (for streaming state before result is available)
+ * Returns partial SlideInfo that can be used to show a loading preview
+ */
+function extractSlideInfoFromArgs(toolCallArgs: Record<string, any> | string | undefined): SlideInfo | undefined {
+  if (!toolCallArgs) return undefined;
+
+  try {
+    let args: Record<string, any> = {};
+    if (typeof toolCallArgs === 'string') {
+      try {
+        args = JSON.parse(toolCallArgs);
+      } catch {
+        // Try to extract presentation_name from partial JSON
+        const presentationMatch = toolCallArgs.match(/"presentation_name"\s*:\s*"([^"]+)"/);
+        const slideNumMatch = toolCallArgs.match(/"slide_number"\s*:\s*(\d+)/);
+        if (presentationMatch) {
+          args = {
+            presentation_name: presentationMatch[1],
+            slide_number: slideNumMatch ? parseInt(slideNumMatch[1], 10) : 1,
+          };
+        } else {
+          return undefined;
+        }
+      }
+    } else {
+      args = toolCallArgs;
+    }
+
+    if (args?.presentation_name) {
+      return {
+        presentationName: args.presentation_name,
+        slideNumber: args.slide_number || 1,
+        slideTitle: args.title || `Slide ${args.slide_number || 1}`,
+        totalSlides: args.slide_number || 1,
+      };
+    }
+  } catch (e) {
+    log.error('[extractSlideInfoFromArgs] Error:', e);
   }
   return undefined;
 }
@@ -728,8 +772,20 @@ export const ThreadContent: React.FC<ThreadContentProps> = React.memo(
     const isDark = colorScheme === 'dark';
     const { agents } = useAgent();
 
-    // State for reasoning expanded (persists across streaming/persisted transitions)
-    const [reasoningExpanded, setReasoningExpanded] = React.useState(false);
+    // Per-section reasoning expanded state: keyed by group.key (Path 1) or 'streaming' (Path 2)
+    // Each reasoning toggle is independent — expanding one doesn't affect others,
+    // and new user turns don't collapse previously expanded sections.
+    const [expandedReasoningSections, setExpandedReasoningSections] = React.useState<Record<string, boolean>>({});
+    const getReasoningExpanded = React.useCallback(
+      (key: string) => expandedReasoningSections[key] ?? false,
+      [expandedReasoningSections]
+    );
+    const setReasoningExpandedForKey = React.useCallback(
+      (key: string, expanded: boolean) => {
+        setExpandedReasoningSections(prev => ({ ...prev, [key]: expanded }));
+      },
+      []
+    );
 
     // Ref for reasoning content freezing (prevents flash during transitions)
     const lastReasoningContentRef = React.useRef<string>('');
@@ -751,6 +807,23 @@ export const ThreadContent: React.FC<ThreadContentProps> = React.memo(
     const [isInReasoningGracePeriod, setIsInReasoningGracePeriod] = React.useState(false);
     const gracePeriodTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
+    // Track previous isSendingMessage to detect new message sends
+    const prevIsSendingMessageRef = React.useRef(false);
+
+    // Reset reasoning ref when user sends a new message (before agent even starts)
+    // This prevents stale reasoning content from blocking the AgentLoader
+    React.useEffect(() => {
+      const wasSending = prevIsSendingMessageRef.current;
+      prevIsSendingMessageRef.current = isSendingMessage;
+
+      // User just started sending a new message - clear stale reasoning
+      if (!wasSending && isSendingMessage) {
+        lastReasoningContentRef.current = '';
+        // NOTE: Don't collapse reasoning sections here — each section's expanded
+        // state is independent and should persist across turns.
+      }
+    }, [isSendingMessage]);
+
     // Reset ref when agent starts a new turn
     React.useEffect(() => {
       const wasActive = prevAgentActiveRef.current;
@@ -760,7 +833,6 @@ export const ThreadContent: React.FC<ThreadContentProps> = React.memo(
       // Agent just started - clear ref for fresh content and start grace period
       if (!wasActive && isNowActive) {
         lastReasoningContentRef.current = '';
-        setReasoningExpanded(false);
 
         // Start reasoning grace period
         setIsInReasoningGracePeriod(true);
@@ -1446,8 +1518,8 @@ export const ThreadContent: React.FC<ThreadContentProps> = React.memo(
                         isReasoningActive={false}
                         isReasoningComplete={true}
                         isPersistedContent={true}
-                        isExpanded={reasoningExpanded}
-                        onExpandedChange={setReasoningExpanded}
+                        isExpanded={getReasoningExpanded(group.key)}
+                        onExpandedChange={(expanded) => setReasoningExpandedForKey(group.key, expanded)}
                       />
                     );
                   }
@@ -1459,8 +1531,8 @@ export const ThreadContent: React.FC<ThreadContentProps> = React.memo(
                       isReasoningActive={isAgentRunning}
                       isReasoningComplete={isReasoningComplete}
                       isPersistedContent={false}
-                      isExpanded={reasoningExpanded}
-                      onExpandedChange={setReasoningExpanded}
+                      isExpanded={getReasoningExpanded('streaming')}
+                      onExpandedChange={(expanded) => setReasoningExpandedForKey('streaming', expanded)}
                     />
                   );
                 }
@@ -1475,8 +1547,8 @@ export const ThreadContent: React.FC<ThreadContentProps> = React.memo(
                     isReasoningActive={false}
                     isReasoningComplete={true}
                     isPersistedContent={true}
-                    isExpanded={reasoningExpanded}
-                    onExpandedChange={setReasoningExpanded}
+                    isExpanded={getReasoningExpanded(group.key)}
+                    onExpandedChange={(expanded) => setReasoningExpandedForKey(group.key, expanded)}
                   />
                 );
               }
@@ -1574,12 +1646,12 @@ export const ThreadContent: React.FC<ThreadContentProps> = React.memo(
                                       message={toolMsg}
                                       onPress={() => handleToolPressInternal(toolMsg)}
                                     />
-                                    {slideInfo && sandboxUrl && (
+                                    {slideInfo && (
                                       <SlideInlineThumbnail
                                         slideInfo={slideInfo}
                                         sandboxUrl={sandboxUrl}
                                         onClick={() => handleToolPressInternal(toolMsg)}
-                                        isLoading={!parsed?.result}
+                                        isLoading={!parsed?.result || !sandboxUrl}
                                       />
                                     )}
                                   </View>
@@ -1633,13 +1705,20 @@ export const ThreadContent: React.FC<ThreadContentProps> = React.memo(
                             detectedTag = 'function_calls';
                             tagStartIndex = functionCallsIndex;
                           } else {
-                            for (const tag of HIDE_STREAMING_XML_TAGS) {
-                              const openingTagPattern = `<${tag}`;
-                              const index = rawContent.indexOf(openingTagPattern);
-                              if (index !== -1) {
-                                detectedTag = tag;
-                                tagStartIndex = index;
-                                break;
+                            // Also check for <invoke> tag directly (fallback for edge cases)
+                            const invokeIndex = rawContent.indexOf('<invoke');
+                            if (invokeIndex !== -1) {
+                              detectedTag = 'invoke';
+                              tagStartIndex = invokeIndex;
+                            } else {
+                              for (const tag of HIDE_STREAMING_XML_TAGS) {
+                                const openingTagPattern = `<${tag}`;
+                                const index = rawContent.indexOf(openingTagPattern);
+                                if (index !== -1) {
+                                  detectedTag = tag;
+                                  tagStartIndex = index;
+                                  break;
+                                }
                               }
                             }
                           }
@@ -1823,13 +1902,14 @@ export const ThreadContent: React.FC<ThreadContentProps> = React.memo(
                                 );
                               }
 
-                              // Special handling for create-slide - show inline thumbnail when completed
+                              // Special handling for create-slide - show inline thumbnail (with loading state during streaming)
                               if (toolName === 'create-slide') {
                                 const toolResult = isCompleted && tc.tool_result ? {
                                   output: tc.tool_result?.output || tc.tool_result,
                                   success: tc.tool_result?.success !== false,
                                 } : undefined;
-                                const slideInfo = extractSlideInfo(toolResult);
+                                // Try to get slideInfo from result first, then from arguments for streaming preview
+                                const slideInfo = extractSlideInfo(toolResult) || extractSlideInfoFromArgs(tc.arguments);
 
                                 return (
                                   <View key={tc.tool_call_id || `streaming-slide-${tcIndex}`}>
@@ -1838,12 +1918,12 @@ export const ThreadContent: React.FC<ThreadContentProps> = React.memo(
                                       toolName={toolName}
                                       onPress={isCompleted ? () => handleStreamingToolCallPress(tc, assistantMsgId) : undefined}
                                     />
-                                    {isCompleted && slideInfo && sandboxUrl && (
+                                    {slideInfo && (
                                       <SlideInlineThumbnail
                                         slideInfo={slideInfo}
                                         sandboxUrl={sandboxUrl}
-                                        onClick={() => handleStreamingToolCallPress(tc, assistantMsgId)}
-                                        isLoading={false}
+                                        onClick={isCompleted ? () => handleStreamingToolCallPress(tc, assistantMsgId) : undefined}
+                                        isLoading={!isCompleted || !sandboxUrl}
                                       />
                                     )}
                                   </View>
@@ -1879,6 +1959,7 @@ export const ThreadContent: React.FC<ThreadContentProps> = React.memo(
                     !isSmoothAnimating &&
                     !smoothAskCompleteText &&
                     !isAskCompleteAnimating &&
+                    !(streamingReasoningContent && streamingReasoningContent.trim().length > 0) &&
                     (streamHookStatus === 'streaming' || streamHookStatus === 'connecting') &&
                     messages[messages.length - 1]?.type !== 'user' &&
                     (() => {
@@ -1895,9 +1976,9 @@ export const ThreadContent: React.FC<ThreadContentProps> = React.memo(
                       });
                       return !hasAskOrComplete;
                     })() && (
-                      <View className="mt-4">
+                      <Animated.View className="mt-4" exiting={FadeOut.duration(150)}>
                         <AgentLoader isReconnecting={isReconnecting} retryCount={retryCount} />
-                      </View>
+                      </Animated.View>
                     )}
 
                   {/* Message actions - show once at the end of the entire assistant block, only when done streaming */}
@@ -1925,9 +2006,12 @@ export const ThreadContent: React.FC<ThreadContentProps> = React.memo(
           if (lastMsg?.type !== 'user') return null;
           
           const isAgentActive = agentStatus === 'running' || agentStatus === 'connecting';
-          const hasStreamingContent = Boolean(streamingTextContent || streamingToolCall || streamingReasoningContent);
-          const hasVisibleReasoning = Boolean(streamingReasoningContent || lastReasoningContentRef.current);
           const isStreaming = streamHookStatus === 'streaming' || streamHookStatus === 'connecting';
+          // CRITICAL: streamingReasoningContent persists from previous runs (only cleared in startStreaming()).
+          // Gate ALL uses on isStreaming to prevent stale data from breaking state detection.
+          const currentReasoningContent = isStreaming ? streamingReasoningContent : null;
+          const hasStreamingContent = Boolean(streamingTextContent || streamingToolCall || currentReasoningContent);
+          const hasVisibleReasoning = Boolean(currentReasoningContent || lastReasoningContentRef.current);
 
           // Show this indicator when:
           // 1. Sending message (contemplating)
@@ -1956,13 +2040,20 @@ export const ThreadContent: React.FC<ThreadContentProps> = React.memo(
               detectedTag = 'function_calls';
               tagStartIndex = functionCallsIndex;
             } else {
-              for (const tag of HIDE_STREAMING_XML_TAGS) {
-                const openingTagPattern = `<${tag}`;
-                const index = rawContent.indexOf(openingTagPattern);
-                if (index !== -1) {
-                  detectedTag = tag;
-                  tagStartIndex = index;
-                  break;
+              // Also check for <invoke> tag directly (fallback for edge cases)
+              const invokeIndex = rawContent.indexOf('<invoke');
+              if (invokeIndex !== -1) {
+                detectedTag = 'invoke';
+                tagStartIndex = invokeIndex;
+              } else {
+                for (const tag of HIDE_STREAMING_XML_TAGS) {
+                  const openingTagPattern = `<${tag}`;
+                  const index = rawContent.indexOf(openingTagPattern);
+                  if (index !== -1) {
+                    detectedTag = tag;
+                    tagStartIndex = index;
+                    break;
+                  }
                 }
               }
             }
@@ -1986,7 +2077,9 @@ export const ThreadContent: React.FC<ThreadContentProps> = React.memo(
           const isBrewing = isAgentActive && !hasVisibleStreamingText && !hasVisibleToolCall && !hasVisibleReasoning;
 
           // Determine if we should show reasoning section
-          const showReasoning = isStreaming && hasVisibleReasoning;
+          // Don't gate on isStreaming - reasoning content persists in lastReasoningContentRef
+          // and gating on isStreaming causes a flash when stream status briefly changes
+          const showReasoning = hasVisibleReasoning && !isContemplating;
 
           return (
             <View className="mb-6">
@@ -1998,11 +2091,17 @@ export const ThreadContent: React.FC<ThreadContentProps> = React.memo(
                 </View>
               )}
 
-              {/* AgentLoader - show when contemplating/brewing but NOT when reasoning is visible */}
-              {(isContemplating || isBrewing) && !hasVisibleReasoning && (
-                <View className="h-6 justify-center overflow-hidden">
+              {/* AgentLoader - show when contemplating or brewing */}
+              {/* For contemplating: always show (stale reasoning shouldn't block it) */}
+              {/* For brewing: only show when no visible reasoning yet */}
+              {(isContemplating || (isBrewing && !hasVisibleReasoning)) && (
+                <Animated.View
+                  className="h-6 justify-center overflow-hidden"
+                  entering={FadeIn.duration(100)}
+                  exiting={FadeOut.duration(150)}
+                >
                   <AgentLoader isReconnecting={isReconnecting} retryCount={retryCount} />
-                </View>
+                </Animated.View>
               )}
 
               {/* ReasoningSection - show when we have reasoning content */}
@@ -2012,8 +2111,8 @@ export const ThreadContent: React.FC<ThreadContentProps> = React.memo(
                   isStreaming={isStreaming}
                   isReasoningActive={isAgentActive}
                   isReasoningComplete={isReasoningComplete}
-                  isExpanded={reasoningExpanded}
-                  onExpandedChange={setReasoningExpanded}
+                  isExpanded={getReasoningExpanded('streaming')}
+                  onExpandedChange={(expanded) => setReasoningExpandedForKey('streaming', expanded)}
                 />
               )}
               
@@ -2035,13 +2134,20 @@ export const ThreadContent: React.FC<ThreadContentProps> = React.memo(
                       detectedTag = 'function_calls';
                       tagStartIndex = functionCallsIndex;
                     } else {
-                      for (const tag of HIDE_STREAMING_XML_TAGS) {
-                        const openingTagPattern = `<${tag}`;
-                        const index = rawContent.indexOf(openingTagPattern);
-                        if (index !== -1) {
-                          detectedTag = tag;
-                          tagStartIndex = index;
-                          break;
+                      // Also check for <invoke> tag directly (fallback for edge cases)
+                      const invokeIndex = rawContent.indexOf('<invoke');
+                      if (invokeIndex !== -1) {
+                        detectedTag = 'invoke';
+                        tagStartIndex = invokeIndex;
+                      } else {
+                        for (const tag of HIDE_STREAMING_XML_TAGS) {
+                          const openingTagPattern = `<${tag}`;
+                          const index = rawContent.indexOf(openingTagPattern);
+                          if (index !== -1) {
+                            detectedTag = tag;
+                            tagStartIndex = index;
+                            break;
+                          }
                         }
                       }
                     }
@@ -2119,23 +2225,24 @@ export const ThreadContent: React.FC<ThreadContentProps> = React.memo(
                          tc.tool_result !== null &&
                          (typeof tc.tool_result === 'object' || Boolean(tc.tool_result)));
 
-                      // Handle create-slide with inline thumbnail
+                      // Handle create-slide with inline thumbnail (with loading state during streaming)
                       if (rawToolName === 'create-slide') {
                         const toolResult = isCompleted && tc.tool_result ? {
                           output: tc.tool_result?.output || tc.tool_result,
                           success: tc.tool_result?.success !== false,
                         } : undefined;
-                        const slideInfo = extractSlideInfo(toolResult);
+                        // Try to get slideInfo from result first, then from arguments for streaming preview
+                        const slideInfo = extractSlideInfo(toolResult) || extractSlideInfoFromArgs(tc.arguments);
 
                         return (
                           <View key={tc.tool_call_id || `trailing-slide-${tcIndex}`}>
                             <CompactStreamingToolCard toolCall={tc} toolName={displayToolName} />
-                            {isCompleted && slideInfo && sandboxUrl && (
+                            {slideInfo && (
                               <SlideInlineThumbnail
                                 slideInfo={slideInfo}
                                 sandboxUrl={sandboxUrl}
                                 onClick={() => {}}
-                                isLoading={false}
+                                isLoading={!isCompleted || !sandboxUrl}
                               />
                             )}
                           </View>
