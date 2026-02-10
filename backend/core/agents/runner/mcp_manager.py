@@ -5,6 +5,7 @@ from core.agentpress.thread_manager import ThreadManager
 from core.tools.mcp_tool_wrapper import MCPToolWrapper
 from core.agentpress.tool import SchemaType
 from core.utils.logger import logger
+from core.utils.config import config
 
 # Timeout for version service calls
 TIMEOUT_VERSION_SERVICE = 10.0
@@ -27,6 +28,9 @@ class MCPManager:
         self.account_id = account_id
     
     async def register_mcp_tools(self, agent_config: dict) -> Optional[MCPToolWrapper]:
+        if not config.ACTIVATE_MCPS_TRIG:
+            logger.debug("MCP tools registration skipped: ACTIVATE_MCPS_TRIG is disabled")
+            return None
         all_mcps = []
         
         if agent_config.get('configured_mcps'):
@@ -67,7 +71,7 @@ class MCPManager:
         if not all_mcps:
             return None
         
-        mcp_wrapper_instance = MCPToolWrapper(mcp_configs=all_mcps)
+        mcp_wrapper_instance = MCPToolWrapper(mcp_configs=all_mcps, account_id=self.account_id)
         try:
             await mcp_wrapper_instance.initialize_and_register_tools()
             
@@ -86,6 +90,9 @@ class MCPManager:
             return None
     
     async def initialize_jit_loader(self, agent_config: Dict[str, Any], cache_only: bool = False) -> None:
+        if not config.ACTIVATE_MCPS_TRIG:
+            logger.debug("MCP JIT loader skipped: ACTIVATE_MCPS_TRIG is disabled")
+            return
         jit_start = time.time()
         if not agent_config:
             return
