@@ -38,6 +38,23 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_MODEL = "gemini-flash"
 
 
+def _get_canvas_image_api_config() -> tuple[str, str]:
+    """Get API base URL and API key for canvas image generation based on MAIN_LLM config."""
+    cfg = get_config()
+    if cfg.MAIN_LLM == "cliproxyai":
+        return (cfg.CLIPROXYAI_API_BASE, cfg.CLIPROXYAI_API_KEY)
+    return (OPENROUTER_BASE_URL, cfg.OPENROUTER_API_KEY or OPENROUTER_API_KEY)
+
+
+def _get_canvas_model_id(model_key: str) -> str:
+    """Get the model ID, stripping 'google/' prefix when using CliProxyAI."""
+    model_id = MODELS.get(model_key, MODELS[DEFAULT_MODEL])
+    cfg = get_config()
+    if cfg.MAIN_LLM == "cliproxyai" and model_id.startswith("google/"):
+        return model_id.replace("google/", "", 1)
+    return model_id
+
+
 class ImageEditRequest(BaseModel):
     """Request model for image AI operations"""
     action: str  # 'upscale', 'remove_bg', 'edit_text', 'mark_edit'
@@ -176,24 +193,28 @@ async def process_with_gemini(
     prompt: str,
     model_key: str = "gemini-flash"
 ) -> str:
-    """Process image using Gemini via OpenRouter"""
-    if not OPENROUTER_API_KEY:
-        raise Exception("OpenRouter API key not configured")
+    """Process image using Gemini via configured API provider (CliProxyAI or OpenRouter)."""
+    api_base, api_key = _get_canvas_image_api_config()
+    if not api_key:
+        raise Exception("Image API key not configured")
     
-    model = MODELS.get(model_key, MODELS["gemini-flash"])
+    model = _get_canvas_model_id(model_key)
     
     # Convert to base64 with proper data URL
     image_b64 = base64.b64encode(image_bytes).decode('utf-8')
     image_data_url = f"data:{mime_type};base64,{image_b64}"
     
-    logger.info(f"Calling OpenRouter with model={model}")
+    logger.info(f"Calling {api_base} with model={model}")
     
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://kortix.ai",
-        "X-Title": "Kortix Canvas AI"
     }
+    
+    cfg = get_config()
+    if cfg.MAIN_LLM != "cliproxyai":
+        headers["HTTP-Referer"] = "https://kortix.ai"
+        headers["X-Title"] = "Kortix Canvas AI"
     
     payload = {
         "model": model,
@@ -220,7 +241,7 @@ async def process_with_gemini(
     
     async with get_http_client() as client:
         response = await client.post(
-            f"{OPENROUTER_BASE_URL}/chat/completions",
+            f"{api_base}/chat/completions",
             headers=headers,
             json=payload,
             timeout=120.0
@@ -228,8 +249,8 @@ async def process_with_gemini(
         
         if response.status_code != 200:
             error_text = response.text
-            logger.error(f"OpenRouter error: {response.status_code} - {error_text}")
-            raise Exception(f"OpenRouter API error: {error_text[:200]}")
+            logger.error(f"Image API error: {response.status_code} - {error_text}")
+            raise Exception(f"Image API error: {error_text[:200]}")
         
         result = response.json()
         
@@ -253,7 +274,7 @@ async def process_with_gemini(
             if isinstance(content, str) and content.startswith("data:image"):
                 return content
         
-        raise Exception("No image in Gemini response")
+        raise Exception("No image in API response")
 
 
 def _get_replicate_token() -> str:

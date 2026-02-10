@@ -22,9 +22,28 @@ from core.billing.credits.media_calculator import select_image_quality, cap_qual
 from core.utils.image_processing import upscale_image_sync, remove_background_sync, UPSCALE_MODEL, REMOVE_BG_MODEL
 from core.utils.file_name_generator import generate_smart_filename
 
-# OpenRouter configuration for Gemini image generation
-OPENROUTER_IMAGE_MODEL = "google/gemini-3-pro-image-preview"
+# Image generation model (without provider prefix)
+_IMAGE_MODEL_NAME = "gemini-3-pro-image-preview"
+
+# Legacy constants kept for backward compatibility in logs
+OPENROUTER_IMAGE_MODEL = f"google/{_IMAGE_MODEL_NAME}"
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
+
+
+def _get_image_api_config() -> tuple[str, str, str]:
+    """Get API base URL, API key, and model ID for image generation based on MAIN_LLM config."""
+    cfg = get_config()
+    if cfg.MAIN_LLM == "cliproxyai":
+        return (
+            cfg.CLIPROXYAI_API_BASE,
+            cfg.CLIPROXYAI_API_KEY,
+            _IMAGE_MODEL_NAME,
+        )
+    return (
+        "https://openrouter.ai/api/v1",
+        cfg.OPENROUTER_API_KEY,
+        f"google/{_IMAGE_MODEL_NAME}",
+    )
 
 
 def parse_image_paths(image_path: Optional[str | list[str]]) -> list[str]:
@@ -503,12 +522,13 @@ Generate, edit, upscale, or remove background from images. Video generation supp
         os.environ["REPLICATE_API_TOKEN"] = token
         return token
 
-    def _get_openrouter_api_key(self) -> str:
-        """Get OpenRouter API key from config"""
-        config = get_config()
-        api_key = config.OPENROUTER_API_KEY
+    def _get_image_api_key(self) -> str:
+        """Get API key for image generation (CliProxyAI or OpenRouter based on MAIN_LLM)."""
+        _, api_key, _ = _get_image_api_config()
         if not api_key:
-            raise Exception("OpenRouter API key not configured. Add OPENROUTER_API_KEY to your .env")
+            cfg = get_config()
+            provider = "CLIPROXYAI" if cfg.MAIN_LLM == "cliproxyai" else "OPENROUTER"
+            raise Exception(f"{provider} API key not configured. Add {provider}_API_KEY to your .env")
         return api_key
 
     async def _generate_with_openrouter(
@@ -518,7 +538,7 @@ Generate, edit, upscale, or remove background from images. Video generation supp
         aspect_ratio: str = "1:1"
     ) -> bytes:
         """
-        Generate or edit image using Gemini 3 Pro via OpenRouter API.
+        Generate or edit image using Gemini 3 Pro via configured API provider.
         
         Parameters:
         - prompt: Text prompt for image generation/editing
@@ -531,14 +551,18 @@ Generate, edit, upscale, or remove background from images. Video generation supp
         Raises:
         - Exception: On API errors
         """
-        api_key = self._get_openrouter_api_key()
+        api_base, api_key, model_id = _get_image_api_config()
+        api_key = self._get_image_api_key()
         
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://kortix.ai",
-            "X-Title": "Kortix Image Generation"
         }
+        
+        cfg = get_config()
+        if cfg.MAIN_LLM != "cliproxyai":
+            headers["HTTP-Referer"] = "https://kortix.ai"
+            headers["X-Title"] = "Kortix Image Generation"
         
         # Build message content
         content = []
@@ -557,7 +581,7 @@ Generate, edit, upscale, or remove background from images. Video generation supp
             })
         
         payload = {
-            "model": OPENROUTER_IMAGE_MODEL,
+            "model": model_id,
             "messages": [{
                 "role": "user",
                 "content": content
@@ -565,11 +589,11 @@ Generate, edit, upscale, or remove background from images. Video generation supp
             "modalities": ["image", "text"]
         }
         
-        logger.info(f"Calling OpenRouter {OPENROUTER_IMAGE_MODEL} for image generation")
+        logger.info(f"Calling {api_base} with model {model_id} for image generation")
         
         async with get_http_client() as client:
             response = await client.post(
-                f"{OPENROUTER_API_BASE}/chat/completions",
+                f"{api_base}/chat/completions",
                 headers=headers,
                 json=payload,
                 timeout=120.0
@@ -577,8 +601,8 @@ Generate, edit, upscale, or remove background from images. Video generation supp
             
             if response.status_code != 200:
                 error_text = response.text
-                logger.error(f"OpenRouter error: {response.status_code} - {error_text[:500]}")
-                raise Exception(f"OpenRouter API error: {error_text[:200]}")
+                logger.error(f"Image API error: {response.status_code} - {error_text[:500]}")
+                raise Exception(f"Image API error: {error_text[:200]}")
             
             result = response.json()
             
@@ -603,7 +627,7 @@ Generate, edit, upscale, or remove background from images. Video generation supp
                 if isinstance(content_result, str) and content_result.startswith("data:image"):
                     return await self._fetch_image_from_url_or_base64(content_result)
             
-            raise Exception("No image in OpenRouter response")
+            raise Exception("No image in API response")
 
     async def _fetch_image_from_url_or_base64(self, image_data: str) -> bytes:
         """Fetch image bytes from URL or decode from base64 data URL."""
@@ -670,9 +694,11 @@ Generate, edit, upscale, or remove background from images. Video generation supp
                 if isinstance(input_image_bytes, ToolResult):  # Error occurred
                     return input_image_bytes
                 
-                logger.info(f"Calling OpenRouter {OPENROUTER_IMAGE_MODEL} for editing with image_path='{image_path}' (image size: {len(input_image_bytes)} bytes)")
+                _, _, active_model = _get_image_api_config()
+                logger.info(f"Calling {active_model} for editing with image_path='{image_path}' (image size: {len(input_image_bytes)} bytes)")
             elif mode == "generate":
-                logger.info(f"Calling OpenRouter {OPENROUTER_IMAGE_MODEL} for generation (aspect_ratio={aspect_ratio})")
+                _, _, active_model = _get_image_api_config()
+                logger.info(f"Calling {active_model} for generation (aspect_ratio={aspect_ratio})")
             else:
                 return self.fail_response("Invalid mode. Use 'generate' or 'edit'.")
 
