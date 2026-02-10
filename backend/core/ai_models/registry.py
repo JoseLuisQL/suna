@@ -94,7 +94,7 @@ class PricingPresets:
     )
 
 
-FREE_MODEL_ID = "kortix/minimax"
+FREE_MODEL_ID = "kortix/basic"
 PREMIUM_MODEL_ID = "kortix/power"
 IMAGE_MODEL_ID = "kortix/haiku"
 
@@ -331,7 +331,7 @@ class ModelFactory:
             return Model(
                 id="kortix/basic",
                 name="Kortix Basic",
-                litellm_model_id="openai/gpt-5.1",
+                litellm_model_id="openai/gpt-5.3-codex",
                 provider=ModelProvider.CLIPROXYAI,
                 aliases=["kortix-basic", "Kortix Basic"],
                 context_window=128_000,
@@ -487,6 +487,26 @@ class ModelFactory:
                 priority=101,
                 recommended=True,
                 enabled=True,
+            )
+        elif main_llm == "cliproxyai":
+            return Model(
+                id="kortix/power",
+                name="Kortix Advanced Mode",
+                litellm_model_id="openai/gpt-5.3-codex",
+                provider=ModelProvider.CLIPROXYAI,
+                aliases=["kortix-power", "Kortix POWER Mode", "Kortix Power", "Kortix Advanced Mode"],
+                context_window=128_000,
+                capabilities=[
+                    ModelCapability.CHAT,
+                    ModelCapability.FUNCTION_CALLING,
+                    ModelCapability.VISION,
+                ],
+                pricing=PricingPresets.CLIPROXYAI,
+                tier_availability=["paid"],
+                priority=101,
+                recommended=True,
+                enabled=True,
+                config=_create_cliproxyai_power_config(),
             )
         elif main_llm == "openrouter":
             # Generic OpenRouter - use custom model or fallback to minimax
